@@ -28,7 +28,7 @@ const program = new Command();
 program
   .name("hcai")
   .description("Agent-friendly CLI for Hack Club AI and its Replicate proxy.")
-  .version("0.1.0")
+  .version("0.2.0")
   .option("--api-key <key>", "Hack Club AI API key. Also reads HCAI_API_KEY, HACKCLUB_AI_API_KEY, HACK_CLUB_AI_KEY, or REPLICATE_API_TOKEN.")
   .option("--base-url <url>", "Hack Club AI proxy base URL.", "https://ai.hackclub.com/proxy/v1")
   .option("-o, --output <mode>", "Output mode: text or json.", "text")
@@ -162,7 +162,7 @@ program
   .command("chat")
   .description("Run a chat completion.")
   .argument("[prompt...]", "Prompt text. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Model ID.", "google/gemini-3-flash-preview")
+  .option("-m, --model <model>", "Model ID.", "google/gemini-3.5-flash")
   .option("--message <message>", "Additional user message. Repeatable.", collect, [])
   .option("--system <text>", "System prompt.")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
@@ -359,6 +359,110 @@ program
     print(data, options.output);
   });
 
+program
+  .command("ocr")
+  .description("Run Mistral OCR through Hack Club AI (closed beta).")
+  .option("--image-url <url>", "HTTPS image URL or base64 data URI.")
+  .option("--document-url <url>", "HTTPS document URL or base64 data URI.")
+  .option("--file-id <id>", "Mistral file ID.")
+  .option("-m, --model <model>", "OCR model.", "mistral-ocr-latest")
+  .option("--pages <pages>", "Comma-separated page numbers to process.")
+  .option("--table-format <format>", "markdown or html.", "markdown")
+  .option("--include-image-base64", "Include base64 image payloads in the response.")
+  .option("--body <json>", "Full OCR request JSON. Overrides document flags.")
+  .option("--body-file <path>", "Read full OCR request JSON from a file, or '-' for stdin.")
+  .action(async (flags: Record<string, unknown>) => {
+    const options = getOptions();
+    const body = await resolveOcrBody(flags);
+    const data = await requestJson<unknown>(options, { method: "POST", path: "/ocr", body });
+    print(data, options.output);
+  });
+
+program
+  .command("moderate")
+  .alias("moderations")
+  .description("Run OpenAI moderation through Hack Club AI.")
+  .argument("[text...]", "Text to moderate. If omitted, stdin is used.")
+  .option("--input <text>", "Text to moderate.")
+  .option("--file <path>", "Read text from a file, or '-' for stdin.")
+  .option("-m, --model <model>", "Moderation model.", "omni-moderation-latest")
+  .action(async (textParts: string[], flags: Record<string, unknown>) => {
+    const options = getOptions();
+    const input = await readText(
+      (flags.input as string | undefined) || textParts.join(" ") || undefined,
+      flags.file as string | undefined,
+    );
+    const data = await requestJson<unknown>(options, {
+      method: "POST",
+      path: "/moderations",
+      body: { model: flags.model, input },
+    });
+    print(data, options.output);
+  });
+
+program
+  .command("responses")
+  .description("Run an OpenAI-style /responses request through Hack Club AI.")
+  .argument("[prompt...]", "Prompt text. If omitted, stdin is used.")
+  .option("-m, --model <model>", "Model ID.", "google/gemini-3.5-flash")
+  .option("--system <text>", "System instructions.")
+  .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
+  .option("--temperature <number>", "Sampling temperature.")
+  .option("--max-tokens <number>", "Maximum output tokens.")
+  .option("--reasoning", "Allow reasoning tokens for models that support thinking.")
+  .option("--stream", "Stream assistant text as it arrives.")
+  .option("--raw", "Print the raw API response.")
+  .action(async (promptParts: string[], flags: Record<string, unknown>) => {
+    const options = getOptions();
+    const prompt = await readText(promptParts.join(" ") || undefined, flags.file as string | undefined);
+    const body: Record<string, unknown> = {
+      model: flags.model,
+      input: prompt,
+      stream: Boolean(flags.stream),
+    };
+    if (typeof flags.system === "string") body.instructions = flags.system;
+    if (!flags.reasoning) {
+      body.include_reasoning = false;
+      body.reasoning = { enabled: false, exclude: true };
+    }
+    maybeNumber(body, "temperature", flags.temperature);
+    maybeNumber(body, "max_output_tokens", flags.maxTokens);
+
+    if (flags.stream) {
+      const response = await request(options, { method: "POST", path: "/responses", body });
+      await streamResponsesResponse(response, options.output === "json");
+      return;
+    }
+
+    const data = await requestJson<Record<string, unknown>>(options, { method: "POST", path: "/responses", body });
+    if (flags.raw || options.output === "json") print(data, options.output);
+    else print(extractResponsesText(data), "text");
+  });
+
+const exa = program.command("exa").description("Exa search tools through Hack Club AI (closed beta).");
+
+for (const endpoint of ["search", "findSimilar", "contents", "answer"] as const) {
+  exa
+    .command(endpoint)
+    .description(`Proxy Exa /${endpoint}.`)
+    .option("--body <json>", "Full Exa request JSON.")
+    .option("--body-file <path>", "Read request JSON from a file, or '-' for stdin.")
+    .option("--query <text>", "Shortcut for search/answer query.")
+    .option("--url <url>", "Shortcut for findSimilar url.")
+    .option("--urls <urls>", "Comma-separated URLs for contents.")
+    .option("--stream", "Request a streaming response when supported.")
+    .action(async (flags: Record<string, unknown>) => {
+      const options = getOptions();
+      const body = await resolveExaBody(endpoint, flags);
+      const data = await requestJson<unknown>(options, {
+        method: "POST",
+        path: `/exa/${endpoint}`,
+        body,
+      });
+      print(data, options.output);
+    });
+}
+
 const replicate = program.command("replicate").description("Use Hack Club AI's allowlisted Replicate proxy.");
 
 replicate
@@ -468,9 +572,11 @@ async function runSpeechSynthesize(textParts: string[], flags: Record<string, un
   );
 
   const input =
-    model === "resemble-ai/chatterbox-pro"
-      ? buildChatterboxInput(text, flags)
-      : buildMinimaxSpeechInput(text, flags);
+    model.startsWith("inworld/")
+      ? buildInworldSpeechInput(text, flags)
+      : model === "resemble-ai/chatterbox-pro"
+        ? buildChatterboxInput(text, flags)
+        : buildMinimaxSpeechInput(text, flags);
   Object.assign(input, await resolveJsonMaybe(flags.input as string | undefined, undefined));
 
   const data = await runReplicateModel(model, { input });
@@ -608,6 +714,18 @@ function modelRow(model: HackClubModel, type: string, details?: boolean): Record
     row.description = model.description || "";
   }
   return row;
+}
+
+function buildInworldSpeechInput(text: string, flags: Record<string, unknown>): Record<string, unknown> {
+  const input: Record<string, unknown> = {
+    text,
+    voice_id: flags.voice || "Ashley",
+    audio_format: flags.format || "mp3",
+  };
+  maybeNumber(input, "temperature", flags.temperature);
+  maybeNumber(input, "speaking_rate", flags.speed);
+  maybeNumber(input, "sample_rate", flags.sampleRate);
+  return input;
 }
 
 function buildMinimaxSpeechInput(text: string, flags: Record<string, unknown>): Record<string, unknown> {
@@ -849,6 +967,123 @@ function saveExtractedImages(
     saved.push(path);
   }
   return saved;
+}
+
+function extractResponsesText(data: Record<string, unknown>): string {
+  const output = data.output;
+  if (typeof output === "string") return output;
+  if (Array.isArray(output)) {
+    const text = output
+      .map((item) => {
+        if (!item || typeof item !== "object") return "";
+        const object = item as Record<string, unknown>;
+        if (typeof object.text === "string") return object.text;
+        if (Array.isArray(object.content)) {
+          return object.content
+            .map((part) => (part && typeof part === "object" ? (part as Record<string, unknown>).text : ""))
+            .filter(Boolean)
+            .join("");
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+    if (text) return text;
+  }
+  if (typeof data.output_text === "string") return data.output_text;
+  return JSON.stringify(data, null, 2);
+}
+
+async function resolveOcrBody(flags: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const full = await resolveJsonMaybe(flags.body as string | undefined, flags.bodyFile as string | undefined);
+  if (full && typeof full === "object" && !Array.isArray(full)) return full as Record<string, unknown>;
+
+  const document =
+    typeof flags.imageUrl === "string"
+      ? { type: "image_url", image_url: flags.imageUrl }
+      : typeof flags.documentUrl === "string"
+        ? { type: "document_url", document_url: flags.documentUrl }
+        : typeof flags.fileId === "string"
+          ? { type: "file", file_id: flags.fileId }
+          : undefined;
+  if (!document) {
+    throw new HcaiError(
+      "OCR requires a document source.",
+      2,
+      "Pass --image-url, --document-url, --file-id, or --body with a full OCR request.",
+    );
+  }
+
+  const body: Record<string, unknown> = {
+    model: flags.model || "mistral-ocr-latest",
+    document,
+    table_format: flags.tableFormat || "markdown",
+  };
+  if (flags.includeImageBase64) body.include_image_base64 = true;
+  if (typeof flags.pages === "string") {
+    body.pages = flags.pages
+      .split(",")
+      .map((page) => Number(page.trim()))
+      .filter((page) => Number.isFinite(page));
+  }
+  return body;
+}
+
+async function resolveExaBody(endpoint: string, flags: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const full = await resolveJsonMaybe(flags.body as string | undefined, flags.bodyFile as string | undefined);
+  if (full && typeof full === "object" && !Array.isArray(full)) return full as Record<string, unknown>;
+
+  const body: Record<string, unknown> = {};
+  if (flags.stream) body.stream = true;
+  if (typeof flags.query === "string") {
+    if (endpoint === "answer") body.query = flags.query;
+    else body.query = flags.query;
+  }
+  if (typeof flags.url === "string" && endpoint === "findSimilar") body.url = flags.url;
+  if (typeof flags.urls === "string" && endpoint === "contents") {
+    body.urls = flags.urls.split(",").map((url) => url.trim()).filter(Boolean);
+  }
+  if (Object.keys(body).length === 0) {
+    throw new HcaiError(
+      `Exa ${endpoint} requires a request body.`,
+      2,
+      "Pass --body, --body-file, or shortcut flags like --query or --url.",
+    );
+  }
+  return body;
+}
+
+async function streamResponsesResponse(response: Response, asJson: boolean): Promise<void> {
+  const reader = response.body?.getReader();
+  if (!reader) return;
+  const decoder = new TextDecoder();
+  const chunks: unknown[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = decoder.decode(value, { stream: true });
+    for (const line of text.split("\n")) {
+      if (!line.startsWith("data: ")) continue;
+      const raw = line.slice(6).trim();
+      if (!raw || raw === "[DONE]") continue;
+      try {
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        chunks.push(parsed);
+        if (!asJson) {
+          const delta =
+            (typeof parsed.delta === "string" ? parsed.delta : undefined) ||
+            (parsed.delta && typeof parsed.delta === "object"
+              ? (parsed.delta as Record<string, unknown>).text
+              : undefined);
+          if (typeof delta === "string") process.stdout.write(delta);
+        }
+      } catch {
+        // Ignore malformed event fragments.
+      }
+    }
+  }
+  if (asJson) process.stdout.write(`${JSON.stringify(chunks, null, 2)}\n`);
+  else process.stdout.write("\n");
 }
 
 async function streamChatResponse(response: Response, asJson: boolean): Promise<void> {

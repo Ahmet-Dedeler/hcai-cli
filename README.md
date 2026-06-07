@@ -68,9 +68,10 @@ Regular chat/image/embedding models are fetched from Hack Club AI at runtime. Re
 
 ```bash
 hcai chat "Write a tiny haiku about ship logs"
-hcai chat --model moonshotai/kimi-k2.5 --system "Be concise" "Explain pgvector"
-cat prompt.txt | hcai chat --model google/gemini-3-flash-preview
+hcai chat --model moonshotai/kimi-k2.6 --system "Be concise" "Explain pgvector"
+cat prompt.txt | hcai chat --model google/gemini-3.5-flash
 hcai chat "Return JSON only" --output json
+hcai responses "Summarize this in one sentence" --system "Be concise"
 ```
 
 By default, chat requests ask OpenRouter to exclude/disable reasoning where supported, because agents usually want the answer rather than hidden thinking payloads. Some reasoning-only models require reasoning; pass `--reasoning` for those:
@@ -102,6 +103,8 @@ Text-to-speech defaults to `minimax/speech-02-turbo` and saves audio instead of 
 
 ```bash
 hcai speech synthesize "Hello from Hack Club AI" --out hello.mp3
+hcai speech synthesize "Newer MiniMax voice" --model minimax/speech-2.8-turbo --out hello.mp3
+hcai tts "Inworld preset voice" --model inworld/tts-1.5-mini --voice Ashley --out hello.mp3
 hcai tts "Short alias for speech synthesize" --output json
 cat script.txt | hcai speech synthesize --voice Deep_Voice_Man --emotion happy
 ```
@@ -154,13 +157,24 @@ hcai replicate run resemble-ai/chatterbox-pro \
   --body '{"input":{"voice":"William (Whispering)","prompt":"Hello"}}'
 ```
 
+## OCR, Moderation, and Exa
+
+These are first-class commands now. OCR and Exa are still closed beta on Hack Club AI, so you may get a 403 until access is enabled.
+
+```bash
+hcai ocr --image-url https://example.com/page.png --output json
+hcai moderate "Check this user message for policy issues" --output json
+hcai exa search --query "Hack Club AI proxy docs" --output json
+hcai exa answer --query "What is pgvector?" --output json
+```
+
 ## Raw API
 
 Use `api` for endpoints that do not have a wrapper yet:
 
 ```bash
 hcai api /stats --output json
-hcai api /responses -X POST --body '{"model":"google/gemini-3-flash-preview","input":"Hello"}' --output json
+hcai api /responses -X POST --body '{"model":"google/gemini-3.5-flash","input":"Hello"}' --output json
 ```
 
 ## Notes For Agents

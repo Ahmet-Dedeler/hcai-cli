@@ -12,7 +12,7 @@ export type RequestOptions = {
 
 export async function request(options: GlobalOptions, requestOptions: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = {
-    "User-Agent": "hcai-cli/0.2.0",
+    "User-Agent": "hcai-cli/0.3.0",
     ...requestOptions.headers,
   };
 
@@ -75,7 +75,7 @@ export async function requestForm<T>(
       method: "POST",
       headers: {
         Authorization: `Bearer ${requireApiKey(options)}`,
-        "User-Agent": "hcai-cli/0.2.0",
+        "User-Agent": "hcai-cli/0.3.0",
       },
       body: form,
       signal: AbortSignal.timeout(options.timeout * 1000),

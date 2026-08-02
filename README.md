@@ -58,7 +58,7 @@ hcai models list --type ocr
 hcai models list --type image-utility
 hcai models list --type image-upscaling
 hcai models list --type replicate --output json
-hcai models info google/gemini-3-flash-preview --output json
+hcai models info google/gemini-3.6-flash --output json
 hcai models info --replicate resemble-ai/chatterbox-pro --output json
 ```
 
@@ -69,12 +69,14 @@ Regular chat/image/embedding models are fetched from Hack Club AI at runtime. Re
 ```bash
 hcai chat "Write a tiny haiku about ship logs"
 hcai chat --model moonshotai/kimi-k2.6 --system "Be concise" "Explain pgvector"
-cat prompt.txt | hcai chat --model google/gemini-3.5-flash
+cat prompt.txt | hcai chat --model google/gemini-3.6-flash
 hcai chat "Return JSON only" --output json
 hcai responses "Summarize this in one sentence" --system "Be concise"
 ```
 
-By default, chat requests ask OpenRouter to exclude/disable reasoning where supported, because agents usually want the answer rather than hidden thinking payloads. Some reasoning-only models require reasoning; pass `--reasoning` for those:
+Chat defaults to `google/gemini-3.6-flash`.
+
+By default, chat requests ask OpenRouter to exclude/disable reasoning where supported, because agents usually want the answer rather than hidden thinking payloads. Reasoning-only endpoints (including `google/gemini-3.6-flash`) reject that and return `Reasoning is mandatory for this endpoint and cannot be disabled`. The CLI handles this for you: it retries with reasoning left on but kept out of the printed output, so those models just work. Pass `--reasoning` when you actually want the thinking tokens:
 
 ```bash
 hcai chat --model openai/gpt-oss-120b --reasoning "Solve this carefully: ..."
@@ -88,22 +90,24 @@ hcai image "A small red robot reading under a desk lamp" --aspect-ratio 1:1 --ou
 hcai image "A cinematic wide shot of Istanbul at dawn" --aspect-ratio 16:9 --output json
 ```
 
+Image generation defaults to `google/gemini-3.1-flash-lite-image`; use `--model google/gemini-3-pro-image` for higher quality. (`google/gemini-3.1-flash-image` and its `-preview` sibling are currently unroutable upstream.)
+
 Image generation uses Hack Club AI's image-capable chat models. Hack Club returns base64 data URLs, so the CLI decodes and saves images by default instead of printing a huge string. Without `--out`, files are written to the current directory as `image_001.png`, `image_002.png`, etc. Use `--raw` if you need the original API response.
 
 ## Embeddings
 
 ```bash
 hcai embed "semantic search text" --output json
-cat document.txt | hcai embed --model openai/text-embedding-3-large
+cat document.txt | hcai embed --model openai/text-embedding-3-large  # override the google/gemini-embedding-2 default
 ```
 
 ## Speech
 
-Text-to-speech defaults to `minimax/speech-02-turbo` and saves audio instead of dumping binary or URLs:
+Text-to-speech defaults to `minimax/speech-2.8-turbo` (~$0.04/request; use `minimax/speech-02-turbo` for the ~$0.0045 older generation) and saves audio instead of dumping binary or URLs:
 
 ```bash
 hcai speech synthesize "Hello from Hack Club AI" --out hello.mp3
-hcai speech synthesize "Newer MiniMax voice" --model minimax/speech-2.8-turbo --out hello.mp3
+hcai speech synthesize "Cheaper MiniMax voice" --model minimax/speech-02-turbo --out hello.mp3
 hcai tts "Inworld preset voice" --model inworld/tts-1.5-mini --voice Ashley --out hello.mp3
 hcai tts "Short alias for speech synthesize" --output json
 cat script.txt | hcai speech synthesize --voice Deep_Voice_Man --emotion happy
@@ -174,7 +178,7 @@ Use `api` for endpoints that do not have a wrapper yet:
 
 ```bash
 hcai api /stats --output json
-hcai api /responses -X POST --body '{"model":"google/gemini-3.5-flash","input":"Hello"}' --output json
+hcai api /responses -X POST --body '{"model":"google/gemini-3.6-flash","input":"Hello"}' --output json
 ```
 
 ## Notes For Agents

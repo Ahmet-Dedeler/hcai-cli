@@ -96,7 +96,7 @@ export async function fetchEmbeddingModels(options: GlobalOptions): Promise<Hack
 export async function fetchReplicateCategories(): Promise<ReplicateCategory[]> {
   try {
     const response = await fetch(REPLICATE_ALLOWLIST_URL, {
-      headers: { "User-Agent": "hcai-cli/0.2.0" },
+      headers: { "User-Agent": "hcai-cli/0.3.0" },
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) return FALLBACK_REPLICATE_CATEGORIES;

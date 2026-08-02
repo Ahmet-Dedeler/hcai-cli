@@ -28,7 +28,7 @@ const program = new Command();
 program
   .name("hcai")
   .description("Agent-friendly CLI for Hack Club AI and its Replicate proxy.")
-  .version("0.2.0")
+  .version("0.3.0")
   .option("--api-key <key>", "Hack Club AI API key. Also reads HCAI_API_KEY, HACKCLUB_AI_API_KEY, HACK_CLUB_AI_KEY, or REPLICATE_API_TOKEN.")
   .option("--base-url <url>", "Hack Club AI proxy base URL.", "https://ai.hackclub.com/proxy/v1")
   .option("-o, --output <mode>", "Output mode: text or json.", "text")
@@ -162,7 +162,7 @@ program
   .command("chat")
   .description("Run a chat completion.")
   .argument("[prompt...]", "Prompt text. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Model ID.", "google/gemini-3.5-flash")
+  .option("-m, --model <model>", "Model ID.", "google/gemini-3.6-flash")
   .option("--message <message>", "Additional user message. Repeatable.", collect, [])
   .option("--system <text>", "System prompt.")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
@@ -186,20 +186,21 @@ program
       messages,
       stream: Boolean(flags.stream),
     };
-    if (!flags.reasoning) {
-      body.include_reasoning = false;
-      body.reasoning = { enabled: false, exclude: true };
-    }
+    if (!flags.reasoning) disableReasoning(body);
     maybeNumber(body, "temperature", flags.temperature);
     maybeNumber(body, "max_tokens", flags.maxTokens);
 
     if (flags.stream) {
-      const response = await request(options, { method: "POST", path: "/chat/completions", body });
+      const response = await withReasoningRetry(body, (attempt) =>
+        request(options, { method: "POST", path: "/chat/completions", body: attempt }),
+      );
       await streamChatResponse(response, options.output === "json");
       return;
     }
 
-    const data = await requestJson<Record<string, unknown>>(options, { method: "POST", path: "/chat/completions", body });
+    const data = await withReasoningRetry(body, (attempt) =>
+      requestJson<Record<string, unknown>>(options, { method: "POST", path: "/chat/completions", body: attempt }),
+    );
     if (flags.raw || options.output === "json") print(data, options.output);
     else print(extractAssistantText(data), "text");
   });
@@ -208,7 +209,7 @@ program
   .command("image")
   .description("Generate an image through Hack Club AI image-capable chat models.")
   .argument("[prompt...]", "Image prompt. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Image model ID.", "google/gemini-3.1-flash-image-preview")
+  .option("-m, --model <model>", "Image model ID.", "google/gemini-3.1-flash-lite-image")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
   .option("--aspect-ratio <ratio>", "Aspect ratio, e.g. 1:1, 16:9, 9:16.", "1:1")
   .option("--out <path>", "Write the first image to a specific local file.")
@@ -244,7 +245,7 @@ program
   .command("embed")
   .description("Generate embeddings for text.")
   .argument("[text...]", "Text to embed. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Embedding model ID.", "openai/text-embedding-3-large")
+  .option("-m, --model <model>", "Embedding model ID.", "google/gemini-embedding-2")
   .option("--file <path>", "Read text from a file, or '-' for stdin.")
   .action(async (textParts: string[], flags: Record<string, unknown>) => {
     const options = { ...getOptions(), output: "json" as const };
@@ -264,7 +265,7 @@ speech
   .alias("generate")
   .description("Generate speech/audio from text.")
   .argument("[text...]", "Text to synthesize. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Text-to-speech Replicate model.", "minimax/speech-02-turbo")
+  .option("-m, --model <model>", "Text-to-speech Replicate model. speech-2.8-turbo costs ~$0.04/request; use minimax/speech-02-turbo for ~$0.0045.", "minimax/speech-2.8-turbo")
   .option("--text <text>", "Text to synthesize.")
   .option("--text-file <path>", "Read text from a file, or '-' for stdin.")
   .option("--voice <id>", "Voice ID/name. MiniMax default: Deep_Voice_Man.", "Deep_Voice_Man")
@@ -287,7 +288,7 @@ program
   .command("tts")
   .description("Alias for `hcai speech synthesize`.")
   .argument("[text...]", "Text to synthesize. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Text-to-speech Replicate model.", "minimax/speech-02-turbo")
+  .option("-m, --model <model>", "Text-to-speech Replicate model. speech-2.8-turbo costs ~$0.04/request; use minimax/speech-02-turbo for ~$0.0045.", "minimax/speech-2.8-turbo")
   .option("--text <text>", "Text to synthesize.")
   .option("--text-file <path>", "Read text from a file, or '-' for stdin.")
   .option("--voice <id>", "Voice ID/name. MiniMax default: Deep_Voice_Man.", "Deep_Voice_Man")
@@ -404,7 +405,7 @@ program
   .command("responses")
   .description("Run an OpenAI-style /responses request through Hack Club AI.")
   .argument("[prompt...]", "Prompt text. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Model ID.", "google/gemini-3.5-flash")
+  .option("-m, --model <model>", "Model ID.", "google/gemini-3.6-flash")
   .option("--system <text>", "System instructions.")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
   .option("--temperature <number>", "Sampling temperature.")
@@ -421,22 +422,23 @@ program
       stream: Boolean(flags.stream),
     };
     if (typeof flags.system === "string") body.instructions = flags.system;
-    if (!flags.reasoning) {
-      body.include_reasoning = false;
-      body.reasoning = { enabled: false, exclude: true };
-    }
+    if (!flags.reasoning) disableReasoning(body);
     maybeNumber(body, "temperature", flags.temperature);
     maybeNumber(body, "max_output_tokens", flags.maxTokens);
 
     if (flags.stream) {
-      const response = await request(options, { method: "POST", path: "/responses", body });
-      await streamResponsesResponse(response, options.output === "json");
+      const response = await withReasoningRetry(body, (attempt) =>
+        request(options, { method: "POST", path: "/responses", body: attempt }),
+      );
+      await streamResponsesResponse(response, options.output === "json", Boolean(flags.reasoning));
       return;
     }
 
-    const data = await requestJson<Record<string, unknown>>(options, { method: "POST", path: "/responses", body });
+    const data = await withReasoningRetry(body, (attempt) =>
+      requestJson<Record<string, unknown>>(options, { method: "POST", path: "/responses", body: attempt }),
+    );
     if (flags.raw || options.output === "json") print(data, options.output);
-    else print(extractResponsesText(data), "text");
+    else print(extractResponsesText(data, Boolean(flags.reasoning)), "text");
   });
 
 const exa = program.command("exa").description("Exa search tools through Hack Club AI (closed beta).");
@@ -565,7 +567,7 @@ type ModelListType =
 
 async function runSpeechSynthesize(textParts: string[], flags: Record<string, unknown>): Promise<void> {
   const options = getOptions();
-  const model = String(flags.model || "minimax/speech-02-turbo");
+  const model = String(flags.model || "minimax/speech-2.8-turbo");
   const text = await readText(
     (flags.text as string | undefined) || textParts.join(" ") || undefined,
     flags.textFile as string | undefined,
@@ -802,6 +804,48 @@ async function runReplicateModel(model: string, body: Record<string, unknown>): 
   });
 }
 
+/** Ask the provider to skip thinking entirely and keep reasoning out of the response. */
+function disableReasoning(body: Record<string, unknown>): void {
+  body.include_reasoning = false;
+  body.reasoning = { enabled: false, exclude: true };
+}
+
+/**
+ * Some models (google/gemini-3.6-flash and other reasoning-only endpoints) reject
+ * `reasoning: { enabled: false }` with HTTP 400 "Reasoning is mandatory". Those requests
+ * should still work, so fall back automatically instead of making the user pass --reasoning:
+ *
+ *   1. keep reasoning on but excluded from the response (works on /chat/completions),
+ *   2. drop the reasoning field entirely (/responses rejects any reasoning object).
+ *
+ * Either way the model thinks and we print only the answer.
+ */
+async function withReasoningRetry<T>(
+  body: Record<string, unknown>,
+  send: (attempt: Record<string, unknown>) => Promise<T>,
+): Promise<T> {
+  const { reasoning: _dropped, ...withoutReasoning } = body;
+  const fallbacks = [{ ...body, reasoning: { exclude: true } }, { ...withoutReasoning }];
+
+  let attempt = body;
+  for (const fallback of [...fallbacks, null]) {
+    try {
+      return await send(attempt);
+    } catch (error) {
+      const reasoning = body.reasoning as { enabled?: boolean } | undefined;
+      if (!fallback || reasoning?.enabled !== false || !isReasoningMandatoryError(error)) throw error;
+      attempt = fallback;
+    }
+  }
+
+  throw new HcaiError("Unreachable reasoning retry state.", 1);
+}
+
+function isReasoningMandatoryError(error: unknown): boolean {
+  if (!(error instanceof HcaiError)) return false;
+  return /reasoning is (mandatory|required)|reasoning cannot be disabled/i.test(error.message);
+}
+
 function versionedReplicateModel(model: string): string {
   const versions: Record<string, string> = {
     "vaibhavs10/incredibly-fast-whisper": "3ab86df6c8f54c11309d4d1f930ac292bad43ace52d10c80d87eb258b3c9f79c",
@@ -969,7 +1013,7 @@ function saveExtractedImages(
   return saved;
 }
 
-function extractResponsesText(data: Record<string, unknown>): string {
+function extractResponsesText(data: Record<string, unknown>, includeReasoning = false): string {
   const output = data.output;
   if (typeof output === "string") return output;
   if (Array.isArray(output)) {
@@ -977,10 +1021,18 @@ function extractResponsesText(data: Record<string, unknown>): string {
       .map((item) => {
         if (!item || typeof item !== "object") return "";
         const object = item as Record<string, unknown>;
+        // Reasoning-only models keep thinking in the output array even when the request
+        // asked to exclude it, so drop those items unless the user wants them.
+        if (!includeReasoning && object.type === "reasoning") return "";
         if (typeof object.text === "string") return object.text;
         if (Array.isArray(object.content)) {
           return object.content
-            .map((part) => (part && typeof part === "object" ? (part as Record<string, unknown>).text : ""))
+            .map((part) => {
+              if (!part || typeof part !== "object") return "";
+              const record = part as Record<string, unknown>;
+              if (!includeReasoning && record.type === "reasoning_text") return "";
+              return record.text;
+            })
             .filter(Boolean)
             .join("");
         }
@@ -1053,7 +1105,7 @@ async function resolveExaBody(endpoint: string, flags: Record<string, unknown>):
   return body;
 }
 
-async function streamResponsesResponse(response: Response, asJson: boolean): Promise<void> {
+async function streamResponsesResponse(response: Response, asJson: boolean, includeReasoning = false): Promise<void> {
   const reader = response.body?.getReader();
   if (!reader) return;
   const decoder = new TextDecoder();
@@ -1069,7 +1121,8 @@ async function streamResponsesResponse(response: Response, asJson: boolean): Pro
       try {
         const parsed = JSON.parse(raw) as Record<string, unknown>;
         chunks.push(parsed);
-        if (!asJson) {
+        const isReasoningEvent = typeof parsed.type === "string" && parsed.type.includes("reasoning");
+        if (!asJson && (includeReasoning || !isReasoningEvent)) {
           const delta =
             (typeof parsed.delta === "string" ? parsed.delta : undefined) ||
             (parsed.delta && typeof parsed.delta === "object"

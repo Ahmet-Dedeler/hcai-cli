@@ -17,6 +17,8 @@ const FALLBACK_REPLICATE_CATEGORIES: ReplicateCategory[] = [
       { id: "qwen/qwen3-tts", costPerRequest: 0.06 },
       { id: "inworld/tts-1.5-mini", costPerRequest: 0.0175 },
       { id: "inworld/tts-1.5-max", costPerRequest: 0.035 },
+      { id: "inworld/realtime-tts-1.5-mini", costPerRequest: 0.0525 },
+      { id: "inworld/realtime-tts-1.5-max", costPerRequest: 0.1225 },
     ],
   },
   {
@@ -96,7 +98,7 @@ export async function fetchEmbeddingModels(options: GlobalOptions): Promise<Hack
 export async function fetchReplicateCategories(): Promise<ReplicateCategory[]> {
   try {
     const response = await fetch(REPLICATE_ALLOWLIST_URL, {
-      headers: { "User-Agent": "hcai-cli/0.3.0" },
+      headers: { "User-Agent": "hcai-cli/0.3.1" },
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) return FALLBACK_REPLICATE_CATEGORIES;

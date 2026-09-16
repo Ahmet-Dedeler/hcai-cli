@@ -28,7 +28,7 @@ const program = new Command();
 program
   .name("hcai")
   .description("Agent-friendly CLI for Hack Club AI and its Replicate proxy.")
-  .version("0.3.0")
+  .version("0.3.1")
   .option("--api-key <key>", "Hack Club AI API key. Also reads HCAI_API_KEY, HACKCLUB_AI_API_KEY, HACK_CLUB_AI_KEY, or REPLICATE_API_TOKEN.")
   .option("--base-url <url>", "Hack Club AI proxy base URL.", "https://ai.hackclub.com/proxy/v1")
   .option("-o, --output <mode>", "Output mode: text or json.", "text")
@@ -162,7 +162,7 @@ program
   .command("chat")
   .description("Run a chat completion.")
   .argument("[prompt...]", "Prompt text. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Model ID.", "google/gemini-3.6-flash")
+  .option("-m, --model <model>", "Model ID.", "google/gemini-3.8-flash")
   .option("--message <message>", "Additional user message. Repeatable.", collect, [])
   .option("--system <text>", "System prompt.")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
@@ -209,7 +209,7 @@ program
   .command("image")
   .description("Generate an image through Hack Club AI image-capable chat models.")
   .argument("[prompt...]", "Image prompt. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Image model ID.", "google/gemini-3.1-flash-lite-image")
+  .option("-m, --model <model>", "Image model ID.", "google/gemini-3.1-flash-image")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
   .option("--aspect-ratio <ratio>", "Aspect ratio, e.g. 1:1, 16:9, 9:16.", "1:1")
   .option("--out <path>", "Write the first image to a specific local file.")
@@ -405,7 +405,7 @@ program
   .command("responses")
   .description("Run an OpenAI-style /responses request through Hack Club AI.")
   .argument("[prompt...]", "Prompt text. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Model ID.", "google/gemini-3.6-flash")
+  .option("-m, --model <model>", "Model ID.", "google/gemini-3.8-flash")
   .option("--system <text>", "System instructions.")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
   .option("--temperature <number>", "Sampling temperature.")
@@ -811,7 +811,7 @@ function disableReasoning(body: Record<string, unknown>): void {
 }
 
 /**
- * Some models (google/gemini-3.6-flash and other reasoning-only endpoints) reject
+ * Some models (google/gemini-3.8-flash and other reasoning-only endpoints) reject
  * `reasoning: { enabled: false }` with HTTP 400 "Reasoning is mandatory". Those requests
  * should still work, so fall back automatically instead of making the user pass --reasoning:
  *

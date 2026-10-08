@@ -1,4 +1,4 @@
-import { apiUrl, requireApiKey } from "./config.js";
+import { USER_AGENT, apiUrl, requireApiKey } from "./config.js";
 import type { GlobalOptions } from "./types.js";
 import { HcaiError } from "./types.js";
 
@@ -8,11 +8,15 @@ export type RequestOptions = {
   body?: unknown;
   auth?: boolean;
   headers?: Record<string, string>;
+  /** Retry these HTTP statuses with exponential backoff (1s, 2s, 4s...). */
+  retryStatuses?: number[];
+  /** Total attempts when retrying. Defaults to 4. */
+  maxAttempts?: number;
 };
 
 export async function request(options: GlobalOptions, requestOptions: RequestOptions): Promise<Response> {
   const headers: Record<string, string> = {
-    "User-Agent": "hcai-cli/0.3.1",
+    "User-Agent": USER_AGENT,
     ...requestOptions.headers,
   };
 
@@ -29,26 +33,36 @@ export async function request(options: GlobalOptions, requestOptions: RequestOpt
   const url = apiUrl(options, requestOptions.path);
   if (options.verbose) process.stderr.write(`> ${requestOptions.method || "GET"} ${url}\n`);
 
-  let response: Response;
-  try {
-    response = await fetch(url, {
-      method: requestOptions.method || "GET",
-      headers,
-      body,
-      signal: AbortSignal.timeout(options.timeout * 1000),
-    });
-  } catch (error) {
-    const timedOut = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
-    throw new HcaiError(
-      timedOut ? `Request timed out after ${options.timeout}s.` : `Network request failed: ${String(error)}`,
-      timedOut ? 4 : 1,
-      timedOut ? "Retry with a larger --timeout, especially for image or Replicate jobs." : undefined,
-    );
-  }
+  const maxAttempts = requestOptions.retryStatuses?.length ? requestOptions.maxAttempts ?? 4 : 1;
+  for (let attempt = 1; ; attempt++) {
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: requestOptions.method || "GET",
+        headers,
+        body,
+        signal: AbortSignal.timeout(options.timeout * 1000),
+      });
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+      throw new HcaiError(
+        timedOut ? `Request timed out after ${options.timeout}s.` : `Network request failed: ${String(error)}`,
+        timedOut ? 4 : 1,
+        timedOut ? "Retry with a larger --timeout, especially for image or Replicate jobs." : undefined,
+      );
+    }
 
-  if (options.verbose) process.stderr.write(`< ${response.status} ${response.statusText}\n`);
-  if (!response.ok) await throwApiError(response, url);
-  return response;
+    if (options.verbose) process.stderr.write(`< ${response.status} ${response.statusText}\n`);
+    if (response.ok) return response;
+    if (attempt < maxAttempts && requestOptions.retryStatuses?.includes(response.status)) {
+      const delay = 1000 * 2 ** (attempt - 1);
+      if (options.verbose) process.stderr.write(`  retrying in ${delay / 1000}s (attempt ${attempt + 1}/${maxAttempts})\n`);
+      await response.body?.cancel();
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      continue;
+    }
+    await throwApiError(response, url);
+  }
 }
 
 export async function requestJson<T>(options: GlobalOptions, requestOptions: RequestOptions): Promise<T> {
@@ -75,7 +89,7 @@ export async function requestForm<T>(
       method: "POST",
       headers: {
         Authorization: `Bearer ${requireApiKey(options)}`,
-        "User-Agent": "hcai-cli/0.3.1",
+        "User-Agent": USER_AGENT,
       },
       body: form,
       signal: AbortSignal.timeout(options.timeout * 1000),
@@ -98,14 +112,14 @@ async function throwApiError(response: Response, url: string): Promise<never> {
   let message = text.trim();
   try {
     const parsed = JSON.parse(text) as {
-      error?: string | { message?: string };
-      message?: string;
-      detail?: string;
+      error?: unknown;
+      message?: unknown;
+      detail?: unknown;
     };
-    if (typeof parsed.error === "string") message = parsed.error;
-    else if (parsed.error?.message) message = parsed.error.message;
-    else if (parsed.message) message = parsed.message;
-    else if (parsed.detail) message = parsed.detail;
+    const picked =
+      (parsed.error as { message?: unknown } | undefined)?.message ?? parsed.error ?? parsed.message ?? parsed.detail;
+    // Upstreams sometimes nest objects here (e.g. TypeSafe 529s); never print "[object Object]".
+    if (picked !== undefined) message = typeof picked === "string" ? picked : JSON.stringify(picked);
   } catch {
     // Keep raw text.
   }
@@ -116,8 +130,10 @@ async function throwApiError(response: Response, url: string): Promise<never> {
       : response.status === 403
         ? "For Replicate, this can mean the model is not allowlisted or Replicate is not enabled for your account."
         : response.status === 429
-          ? "Rate limit hit. Retry later or reduce concurrency."
-          : undefined;
+          ? "Rate limit or daily spend limit hit. Check `hcai stats`, retry later, or reduce concurrency."
+          : response.status === 503 || response.status === 529
+            ? "Upstream is overloaded or unavailable. Retry in a bit."
+            : undefined;
 
   throw new HcaiError(`HTTP ${response.status} from ${url}: ${message || response.statusText}`, response.status === 401 ? 3 : 1, hint);
 }

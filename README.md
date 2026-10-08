@@ -68,7 +68,7 @@ Regular chat/image/embedding models are fetched from Hack Club AI at runtime. Re
 
 ```bash
 hcai chat "Write a tiny haiku about ship logs"
-hcai chat --model moonshotai/kimi-k2.6 --system "Be concise" "Explain pgvector"
+hcai chat --model moonshotai/kimi-k3 --system "Be concise" "Explain pgvector"
 cat prompt.txt | hcai chat --model google/gemini-3.8-flash
 hcai chat "Return JSON only" --output json
 hcai responses "Summarize this in one sentence" --system "Be concise"
@@ -90,7 +90,7 @@ hcai image "A small red robot reading under a desk lamp" --aspect-ratio 1:1 --ou
 hcai image "A cinematic wide shot of Istanbul at dawn" --aspect-ratio 16:9 --output json
 ```
 
-Image generation defaults to `google/gemini-3.1-flash-image`; use `--model google/gemini-3-pro-image` for higher quality.
+Image generation defaults to `google/gemini-nano-banana-2.1` (Google's newest image model on the proxy). Use `--model google/gemini-3.1-flash-image` or `google/gemini-3.1-flash-lite-image` for cheaper images, or `google/gemini-3-pro-image` for max quality.
 
 Image generation uses Hack Club AI's image-capable chat models. Hack Club returns base64 data URLs, so the CLI decodes and saves images by default instead of printing a huge string. Without `--out`, files are written to the current directory as `image_001.png`, `image_002.png`, etc. Use `--raw` if you need the original API response.
 
@@ -167,10 +167,30 @@ These are first-class commands now. OCR and Exa are still closed beta on Hack Cl
 
 ```bash
 hcai ocr --image-url https://example.com/page.png --output json
+hcai ocr --file scan.pdf --output json   # local image or PDF, sent inline as base64
 hcai moderate "Check this user message for policy issues" --output json
 hcai exa search --query "Hack Club AI proxy docs" --output json
 hcai exa answer --query "What is pgvector?" --output json
 ```
+
+## Jev (structured answers)
+
+[Jev](https://docs.typesafe.ai/api) is TypeSafe's System One model: you give it some state and typed questions, and it answers each one with calibrated probabilities instead of free text. Good for routing, triage, and filters inside scripts. It's closed beta on Hack Club AI, and you're only billed for input tokens.
+
+```bash
+hcai jev "Help! My payouts have been failing for 3 days." --yes-no "Is this urgent?"
+# yes_no: yes (0.95)
+
+hcai jev --file ticket.txt \
+  --choice "Which team should handle this?" --options billing,technical,sales \
+  --score "How frustrated is the customer?" --levels "calm,annoyed,furious"
+
+cat chat.json | hcai jev --json-state --yes-no "Does the user want to cancel?" --output json
+hcai jev --questions-file questions.json --file state.txt --output json   # full questions map
+hcai jev models
+```
+
+`--yes-no` can be repeated. `--model jev-preview` tries the preview release. The CLI retries TypeSafe's 429/503/529 overload responses with backoff.
 
 ## Raw API
 
@@ -190,6 +210,8 @@ hcai models list --type replicate --output json
 hcai models list --type text-to-speech --output json
 hcai chat "Short answer only: what is 2+2?" --output json
 ```
+
+Every account gets $3/day of usage. Check spend with `hcai stats`; a 429 usually means you hit the daily cap.
 
 Use `--timeout` for long image or Replicate jobs:
 

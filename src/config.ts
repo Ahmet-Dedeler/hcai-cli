@@ -4,6 +4,10 @@ import { dirname, join } from "node:path";
 import type { ConfigFile, GlobalOptions } from "./types.js";
 import { HcaiError } from "./types.js";
 
+/** CLI version, shared by --version and the User-Agent header. */
+export const VERSION = "0.4.0";
+export const USER_AGENT = `hcai-cli/${VERSION}`;
+
 export const DEFAULT_BASE_URL = "https://ai.hackclub.com/proxy/v1";
 const CONFIG_PATH = join(homedir(), ".hcai", "config.json");
 

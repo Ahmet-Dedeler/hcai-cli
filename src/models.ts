@@ -1,3 +1,4 @@
+import { USER_AGENT } from "./config.js";
 import { requestJson } from "./http.js";
 import type { GlobalOptions, HackClubModel, ModelsResponse, ReplicateCategory } from "./types.js";
 
@@ -98,7 +99,7 @@ export async function fetchEmbeddingModels(options: GlobalOptions): Promise<Hack
 export async function fetchReplicateCategories(): Promise<ReplicateCategory[]> {
   try {
     const response = await fetch(REPLICATE_ALLOWLIST_URL, {
-      headers: { "User-Agent": "hcai-cli/0.3.1" },
+      headers: { "User-Agent": USER_AGENT },
       signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) return FALLBACK_REPLICATE_CATEGORIES;

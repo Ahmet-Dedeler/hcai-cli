@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
 import {
+  VERSION,
   getConfigPath,
   maskKey,
   readConfig,
@@ -28,7 +29,7 @@ const program = new Command();
 program
   .name("hcai")
   .description("Agent-friendly CLI for Hack Club AI and its Replicate proxy.")
-  .version("0.3.1")
+  .version(VERSION)
   .option("--api-key <key>", "Hack Club AI API key. Also reads HCAI_API_KEY, HACKCLUB_AI_API_KEY, HACK_CLUB_AI_KEY, or REPLICATE_API_TOKEN.")
   .option("--base-url <url>", "Hack Club AI proxy base URL.", "https://ai.hackclub.com/proxy/v1")
   .option("-o, --output <mode>", "Output mode: text or json.", "text")
@@ -209,7 +210,7 @@ program
   .command("image")
   .description("Generate an image through Hack Club AI image-capable chat models.")
   .argument("[prompt...]", "Image prompt. If omitted, stdin is used.")
-  .option("-m, --model <model>", "Image model ID.", "google/gemini-3.1-flash-image")
+  .option("-m, --model <model>", "Image model ID.", "google/gemini-nano-banana-2.1")
   .option("--file <path>", "Read prompt from a file, or '-' for stdin.")
   .option("--aspect-ratio <ratio>", "Aspect ratio, e.g. 1:1, 16:9, 9:16.", "1:1")
   .option("--out <path>", "Write the first image to a specific local file.")
@@ -365,6 +366,7 @@ program
   .description("Run Mistral OCR through Hack Club AI (closed beta).")
   .option("--image-url <url>", "HTTPS image URL or base64 data URI.")
   .option("--document-url <url>", "HTTPS document URL or base64 data URI.")
+  .option("--file <path>", "Local image or PDF; sent inline as a base64 data URI.")
   .option("--file-id <id>", "Mistral file ID.")
   .option("-m, --model <model>", "OCR model.", "mistral-ocr-latest")
   .option("--pages <pages>", "Comma-separated page numbers to process.")
@@ -464,6 +466,58 @@ for (const endpoint of ["search", "findSimilar", "contents", "answer"] as const)
       print(data, options.output);
     });
 }
+
+const jev = program
+  .command("jev")
+  .description("Structured yes/no, choice, and score answers from TypeSafe's Jev (closed beta).");
+
+jev
+  .command("ask", { isDefault: true })
+  .description("Ask Jev typed questions about some state (text or JSON).")
+  .argument("[state...]", "Content to evaluate. If omitted, stdin is used.")
+  .option("--file <path>", "Read state from a file, or '-' for stdin.")
+  .option("--json-state", "Parse the state as JSON (chat logs, records, app state) instead of sending it as text.")
+  .option("-m, --model <model>", "Jev model: jev-latest or jev-preview.", "jev-latest")
+  .option("--yes-no <question>", "Yes/no question; answers with a 0-1 probability of yes. Repeatable.", collect, [])
+  .option("--choice <question>", "Pick one option. Needs --options.")
+  .option("--options <list>", "Comma-separated options for --choice.")
+  .option("--score <question>", "Rate along ordered levels. Needs --levels.")
+  .option("--levels <list>", "Comma-separated levels for --score, lowest first, 2-10 entries.")
+  .option("--questions <json>", "Full questions map JSON. Merged with shortcut flags.")
+  .option("--questions-file <path>", "Read the questions map JSON from a file.")
+  .option("--body <json>", "Full Jev request JSON. Overrides everything else.")
+  .option("--body-file <path>", "Read the full Jev request JSON from a file, or '-' for stdin.")
+  .addHelpText(
+    "after",
+    `
+Examples:
+  hcai jev "Help! My payouts have been failing for 3 days." --yes-no "Is this urgent?"
+  hcai jev --file ticket.txt --choice "Which team?" --options billing,technical,sales
+  hcai jev "This is the third time I'm asking" --score "How frustrated?" --levels "calm,annoyed,furious"`,
+  )
+  .action(async (stateParts: string[], flags: Record<string, unknown>) => {
+    const options = getOptions();
+    const body = await resolveJevBody(stateParts, flags);
+    const data = await requestJson<Record<string, unknown>>(options, {
+      method: "POST",
+      path: "/jev/systemone",
+      body,
+      // TypeSafe asks clients to back off and retry on overload.
+      retryStatuses: [429, 502, 503, 529],
+    });
+    if (options.output === "json") print(data, "json");
+    else print(formatJevAnswers(data), "text");
+  });
+
+jev
+  .command("models")
+  .description("List Jev models.")
+  .action(async () => {
+    const options = getOptions();
+    const data = await requestJson<{ models?: Array<Record<string, unknown>> }>(options, { path: "/jev/models" });
+    if (options.output === "json") print(data, "json");
+    else print(data.models || [], "text");
+  });
 
 const replicate = program.command("replicate").description("Use Hack Club AI's allowlisted Replicate proxy.");
 
@@ -1055,14 +1109,16 @@ async function resolveOcrBody(flags: Record<string, unknown>): Promise<Record<st
       ? { type: "image_url", image_url: flags.imageUrl }
       : typeof flags.documentUrl === "string"
         ? { type: "document_url", document_url: flags.documentUrl }
-        : typeof flags.fileId === "string"
-          ? { type: "file", file_id: flags.fileId }
-          : undefined;
+        : typeof flags.file === "string"
+          ? localOcrDocument(flags.file)
+          : typeof flags.fileId === "string"
+            ? { type: "file", file_id: flags.fileId }
+            : undefined;
   if (!document) {
     throw new HcaiError(
       "OCR requires a document source.",
       2,
-      "Pass --image-url, --document-url, --file-id, or --body with a full OCR request.",
+      "Pass --image-url, --document-url, --file, --file-id, or --body with a full OCR request.",
     );
   }
 
@@ -1079,6 +1135,28 @@ async function resolveOcrBody(flags: Record<string, unknown>): Promise<Record<st
       .filter((page) => Number.isFinite(page));
   }
   return body;
+}
+
+const OCR_MIME_TYPES: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
+  ".avif": "image/avif",
+};
+
+/** Turn a local file into an OCR document. Images go as image_url, everything else as document_url. */
+function localOcrDocument(path: string): Record<string, string> {
+  const mime = OCR_MIME_TYPES[extname(path).toLowerCase()];
+  if (!mime) {
+    throw new HcaiError(`Unsupported OCR file type: ${path}`, 2, `Use one of: ${Object.keys(OCR_MIME_TYPES).join(", ")}.`);
+  }
+  const dataUri = `data:${mime};base64,${readFileSync(path).toString("base64")}`;
+  return mime.startsWith("image/")
+    ? { type: "image_url", image_url: dataUri }
+    : { type: "document_url", document_url: dataUri };
 }
 
 async function resolveExaBody(endpoint: string, flags: Record<string, unknown>): Promise<Record<string, unknown>> {
@@ -1175,6 +1253,76 @@ async function resolveReplicateBody(flags: Record<string, unknown>): Promise<Rec
     throw new HcaiError("Replicate input must be a JSON object.", 2, "Example: hcai replicate run resemble-ai/chatterbox-pro --input '{\"prompt\":\"hello\",\"voice\":\"William (Whispering)\"}'");
   }
   return { input };
+}
+
+async function resolveJevBody(stateParts: string[], flags: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const full = await resolveJsonMaybe(flags.body as string | undefined, flags.bodyFile as string | undefined);
+  if (full && typeof full === "object" && !Array.isArray(full)) return full as Record<string, unknown>;
+
+  const questions: Record<string, unknown> = {};
+  const extra = await resolveJsonMaybe(flags.questions as string | undefined, flags.questionsFile as string | undefined);
+  if (extra !== undefined) {
+    if (!extra || typeof extra !== "object" || Array.isArray(extra)) {
+      throw new HcaiError("--questions must be a JSON object keyed by question id.", 2);
+    }
+    Object.assign(questions, extra);
+  }
+
+  const yesNo = (flags.yesNo as string[] | undefined) || [];
+  yesNo.forEach((question, index) => {
+    questions[yesNo.length === 1 ? "yes_no" : `yes_no_${index + 1}`] = { type: "noul", instructions: question };
+  });
+  if (typeof flags.choice === "string") {
+    const choices = splitList(flags.options);
+    if (choices.length < 2) throw new HcaiError("--choice needs at least two --options.", 2, 'Example: --options "billing,technical,sales"');
+    questions.choice = { type: "choice", instructions: flags.choice, criteria: Object.fromEntries(choices.map((c) => [c, null])) };
+  }
+  if (typeof flags.score === "string") {
+    const levels = splitList(flags.levels);
+    if (levels.length < 2 || levels.length > 10) throw new HcaiError("--score needs 2-10 --levels.", 2, 'Example: --levels "calm,annoyed,furious"');
+    questions.score = { type: "score", instructions: flags.score, criteria: levels };
+  }
+  if (Object.keys(questions).length === 0) {
+    throw new HcaiError("Jev needs at least one question.", 2, "Pass --yes-no, --choice with --options, --score with --levels, or --questions.");
+  }
+
+  const text = await readText(stateParts.join(" ") || undefined, flags.file as string | undefined);
+  let state: unknown = text;
+  if (flags.jsonState) {
+    try {
+      state = JSON.parse(text);
+    } catch (error) {
+      throw new HcaiError(`--json-state given but state is not valid JSON: ${error instanceof Error ? error.message : String(error)}`, 2);
+    }
+  }
+  return { model: flags.model || "jev-latest", state, questions };
+}
+
+/** One line per answer: `id: yes 0.95`, `id: billing (88%)`, `id: 1.05 ~ Frustrated`. */
+function formatJevAnswers(data: Record<string, unknown>): string {
+  const answers = (data.answers || {}) as Record<string, Record<string, unknown>>;
+  const lines = Object.entries(answers).map(([id, answer]) => {
+    if (answer.type === "noul") {
+      const p = Number(answer.noul);
+      return `${id}: ${p >= 0.5 ? "yes" : "no"} (${p.toFixed(2)})`;
+    }
+    if (answer.type === "choice") {
+      const probs = (answer.probabilities || {}) as Record<string, number>;
+      const pct = Math.round((probs[String(answer.choice)] ?? 0) * 100);
+      return `${id}: ${String(answer.choice)} (${pct}%)`;
+    }
+    if (answer.type === "score") {
+      const score = Number(answer.score);
+      const legend = (answer.legend || {}) as Record<string, string>;
+      return `${id}: ${score.toFixed(2)} ~ ${legend[String(Math.round(score))] ?? ""}`.trimEnd();
+    }
+    return `${id}: ${JSON.stringify(answer)}`;
+  });
+  return lines.join("\n");
+}
+
+function splitList(value: unknown): string[] {
+  return typeof value === "string" ? value.split(",").map((item) => item.trim()).filter(Boolean) : [];
 }
 
 async function resolveJsonMaybe(json?: string, file?: string): Promise<unknown | undefined> {
